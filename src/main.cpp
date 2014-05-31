@@ -42,7 +42,7 @@ CBigNum bnProofOfWorkFirstBlock(~uint256(0) >> 30);
 unsigned int nTargetSpacing = 60; // 60 seconds
 unsigned int nStakeTargetSpacing = 30; // 30 seconds
 unsigned int nRetarget = 50;
-unsigned int nStakeMinAge = 24 * 60 * 60; // 1 day hour
+unsigned int nStakeMinAge = 2 * 24 * 60 * 60; // 1 day hour
 unsigned int nStakeMaxAge = -1;           //unlimited
 unsigned int nModifierInterval = 10 * 60; // time to elapse before new modifier is computed
 static const int64_t nTargetTimespan_legacy = nTargetSpacing * nRetarget; // every 50 blocks
@@ -810,7 +810,7 @@ int CMerkleTx::GetBlocksToMaturity() const
 {
     if (!(IsCoinBase() || IsCoinStake()))
         return 0;
-    return max(0, (nCoinbaseMaturity+10) - GetDepthInMainChain());
+    return max(0, (nCoinbaseMaturity+20) - GetDepthInMainChain());
 }
 
 
@@ -966,13 +966,17 @@ uint256 WantedByOrphan(const CBlock* pblockOrphan)
 }
 
 // miner's coin base reward
-int64_t GetProofOfWorkReward(int64_t nFees)
+int64_t GetProofOfWorkReward(int64_t nFees, int nHeight)
 {
+    if(nHeight == 1)
+        return 60000 * COIN;
+    if(nHeight < 80)
+        return COIN;
     int64_t nSubsidy = 100 * COIN;
     double dDiff = GetDifficulty();
-    nSubsidy = (11111111 / (pow((dDiff+3000.0)/9.0,2.0)) * COIN);
-    if (nSubsidy > 20 * COIN) nSubsidy = 20 * COIN;
-    else if (nSubsidy < 4 * COIN) nSubsidy = 4 * COIN;
+    nSubsidy = (11112222 / (pow((dDiff+3000.0)/9.0,2.0)) * COIN);
+    if (nSubsidy > 100 * COIN) nSubsidy = 100 * COIN;
+    else if (nSubsidy < 25 * COIN) nSubsidy = 25 * COIN;
 
     return nSubsidy + nFees;
 }
@@ -1034,59 +1038,7 @@ const CBlockIndex* GetLastBlockIndex(const CBlockIndex* pindex, bool fProofOfSta
     return pindex;
 }
 
-// legacy diff-mode
-unsigned int static GetNextWorkRequired_legacy(const CBlockIndex* pindexLast)
-{
-    unsigned int nProofOfWorkLimit = bnProofOfWorkLimit.GetCompact();
-
-    // Genesis block
-    if (pindexLast == NULL)
-        return bnProofOfWorkFirstBlock.GetCompact();
-
-    // Only change once per interval
-    if ((pindexLast->nHeight+1) % nInterval != 0)
-    {
-        // Special difficulty rule for testnet:
-        return pindexLast->nBits;
-    }
-
-    // Genesiscoin: This fixes an issue where a 51% attack can change difficulty at will.
-    // Go back the full period unless it's the first retarget after genesis. Code courtesy of Art Forz
-    int blockstogoback = nInterval-1;
-    if ((pindexLast->nHeight+1) != nInterval)
-        blockstogoback = nInterval;
-
-    // Go back by what we want to be 14 days worth of blocks
-    const CBlockIndex* pindexFirst = pindexLast;
-    for (int i = 0; pindexFirst && i < blockstogoback; i++)
-        pindexFirst = pindexFirst->pprev;
-    assert(pindexFirst);
-
-    // Limit adjustment step
-    int64_t nActualTimespan = pindexLast->GetBlockTime() - pindexFirst->GetBlockTime();
-    if (nActualTimespan < nTargetTimespan/4)
-        nActualTimespan = nTargetTimespan/4;
-    if (nActualTimespan > nTargetTimespan*4)
-        nActualTimespan = nTargetTimespan*4;
-
-    // Retarget
-    CBigNum bnNew;
-    bnNew.SetCompact(pindexLast->nBits);
-    bnNew *= nActualTimespan;
-    bnNew /= nTargetTimespan;
-
-    if (bnNew > bnProofOfWorkLimit)
-        bnNew = bnProofOfWorkLimit;
-
-    /// debug print
-    printf("GetNextWorkRequired (legacy) RETARGET\n");
-    printf("Before: %08x  %s\n", pindexLast->nBits, CBigNum().SetCompact(pindexLast->nBits).getuint256().ToString().c_str());
-    printf("After:  %08x  %s\n", bnNew.GetCompact(), bnNew.getuint256().ToString().c_str());
-
-    return bnNew.GetCompact();
-}
-
-static unsigned int GetNextTargetRequired_(const CBlockIndex* pindexLast, bool fProofOfStake)
+static unsigned int GetNextTargetRequired(const CBlockIndex* pindexLast, bool fProofOfStake)
 {
     CBigNum bnTargetLimit = fProofOfStake ? bnProofOfStakeLimit : bnProofOfWorkLimit;
 
@@ -1118,19 +1070,6 @@ static unsigned int GetNextTargetRequired_(const CBlockIndex* pindexLast, bool f
         bnNew = bnTargetLimit;
 
     return bnNew.GetCompact();
-}
-
-unsigned int GetNextTargetRequired(const CBlockIndex* pindexLast, bool fProofOfStake)
-{
-    int change;
-    if(fTestNet)
-        change = 160;
-    else
-        change = 500;
-    if(pindexLast->nHeight + 1 > change)
-        return GetNextTargetRequired_(pindexLast, fProofOfStake);
-    else
-        return GetNextWorkRequired_legacy(pindexLast);
 }
 
 bool CheckProofOfWork(uint256 hash, unsigned int nBits)
@@ -1620,7 +1559,7 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
 
     if (IsProofOfWork())
     {
-        int64_t nReward = GetProofOfWorkReward(nFees);
+        int64_t nReward = GetProofOfWorkReward(nFees, pindex->nHeight);
         // Check coinbase reward
         if (vtx[0].GetValueOut() > nReward)
             return DoS(50, error("ConnectBlock() : coinbase reward exceeded (actual=%"PRId64" vs calculated=%"PRId64")",
